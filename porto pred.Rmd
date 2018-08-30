@@ -1,0 +1,227 @@
+---
+title: "Porto Seguro"
+author: "Krishna"
+date: "5 July 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Hmisc)
+library(caret)
+library(rpart)
+library(rattle)
+library(xgboost)
+library(randomForest)
+library(ROCR)
+library(pROC)
+setwd("E:\\porto pred")
+train2 = read.csv("train.csv")
+test = read.csv("test.csv")
+```
+
+```{r}
+str(train2)
+```
+
+### Replcing "-1" with NA ###
+```{r}
+train2[train2== -1] = NA
+test[test == -1] = NA
+```
+
+```{r}
+t = sapply(train2 , function(x) sum(is.na(x)))
+t[t>100000]
+```
+
+```{r}
+t1 = sapply(test , function(x) sum(is.na(x)))
+t1[t1>100000]
+```
+
+### Removing Columns Where Missing Value is more than 1lakh ###
+```{r}
+train = train2 %>% select(-ps_reg_03,-ps_car_03_cat,-ps_car_05_cat)
+test = test %>% select(-ps_reg_03,-ps_car_03_cat,-ps_car_05_cat)
+
+```
+
+
+
+```{r}
+sapply(train, function(x) sum(is.na(x)))
+sapply(test, function(x) sum(is.na(x)))
+```
+
+### Imputing Missing Values ###
+
+##### Creating Mode Function #####
+```{r}
+Mode = function (x, na.rm) {
+  xtab = table(x)
+  xmode = names(which(xtab == max(xtab)))
+  if (length(xmode) > 1) xmode = ">1 mode"
+  return(xmode)
+}
+
+
+```
+
+```{r}
+train$ps_ind_02_cat[is.na(train$ps_ind_02_cat)] = Mode(train$ps_ind_02_cat)
+train$ps_ind_04_cat[is.na(train$ps_ind_04_cat)] = Mode(train$ps_ind_04_cat)
+train$ps_ind_05_cat[is.na(train$ps_ind_05_cat)] = Mode(train$ps_ind_05_cat)
+train$ps_car_01_cat[is.na(train$ps_car_01_cat)] = Mode(train$ps_car_01_cat)
+train$ps_car_02_cat[is.na(train$ps_car_02_cat)] = Mode(train$ps_car_02_cat)
+train$ps_car_07_cat[is.na(train$ps_car_07_cat)] = Mode(train$ps_car_07_cat)
+train$ps_car_09_cat[is.na(train$ps_car_09_cat)] = Mode(train$ps_car_09_cat)
+train$ps_car_11[is.na(train$ps_car_11)] = Mode(train$ps_car_11)
+train$ps_car_12[is.na(train$ps_car_12)] = mean(train$ps_car_12,na.rm=T)
+train$ps_car_14[is.na(train$ps_car_14)] = mean(train$ps_car_14,na.rm=T)
+```
+
+```{r}
+test$ps_ind_02_cat[is.na(test$ps_ind_02_cat)] = Mode(test$ps_ind_02_cat)
+test$ps_ind_04_cat[is.na(test$ps_ind_04_cat)] = Mode(test$ps_ind_04_cat)
+test$ps_ind_05_cat[is.na(test$ps_ind_05_cat)] = Mode(test$ps_ind_05_cat)
+test$ps_car_01_cat[is.na(test$ps_car_01_cat)] = Mode(test$ps_car_01_cat)
+test$ps_car_02_cat[is.na(test$ps_car_02_cat)] = Mode(test$ps_car_02_cat)
+test$ps_car_07_cat[is.na(test$ps_car_07_cat)] = Mode(test$ps_car_07_cat)
+test$ps_car_09_cat[is.na(test$ps_car_09_cat)] = Mode(test$ps_car_09_cat)
+test$ps_car_11[is.na(test$ps_car_11)] = Mode(test$ps_car_11)
+test$ps_car_12[is.na(test$ps_car_12)] = mean(test$ps_car_12,na.rm=T)
+test$ps_car_14[is.na(test$ps_car_14)] = mean(test$ps_car_14,na.rm=T)
+
+```
+
+
+```{r}
+sum(is.na(train))
+sum(is.na(test))
+```
+
+### Sampling Data ###
+```{r}
+zero = train[train$target==0,]
+
+
+one = train[train$target==1,]
+len = nrow(one)
+
+zero_sample = sample(1:nrow(zero),len)
+length(zero_sample)
+
+train_new = train[c(zero_sample,row.names(one)),]
+nrow(train_new)
+
+```
+
+### XG Boost ###
+```{r}
+
+train_mat = model.matrix(~.+0,train_new %>% select(-target))
+dmat_train = xgb.DMatrix(train_mat,label=as.numeric(as.character(train_new$target)))
+
+tst_mat = model.matrix(~.+0,test)
+dmat_tst = xgb.DMatrix(tst_mat)
+
+param = list(colsample_bytree = 0.8,
+              subsample_bytree = 0.7,
+              booster="gbtree",
+              objective="binary:logistic",
+              eta=.2,
+              gamma=5,
+              max_depth=5,
+              eval_metric = "auc",
+              nthread = 1)
+
+xg_mod = xgb.train(params = param,
+                    data = dmat_train,
+                    nrounds = 45)
+
+
+xg_predict = predict(xg_mod,dmat_tst)
+predic = ifelse(xg_predict>0.5,1,0)
+
+output1 = data.frame(id=test$id,target=xg_predict)
+
+write.csv(output1,file="E:\\porto pred\\output.csv",row.names = F)
+
+```
+
+### Confusion Matrix ###
+
+```{r}
+
+tran=train[sample(1:nrow(train),0.7*nrow(train)),]
+
+tst=train[sample(1:nrow(train),0.3*nrow(train)),]
+
+
+zer = tran[tran$target==0,]
+on = tran[tran$target==1,]
+leng = nrow(on)
+
+set.seed(1001)
+ze = sample(x = row.names(zer),3*leng)
+
+
+
+trn = tran[c(ze,row.names(on)),]
+
+trn_mat <- model.matrix(~.+0,trn %>% select(-target))
+test_mat <- model.matrix(~.+0,tst %>% select(-target))
+dmat_train <- xgb.DMatrix(trn_mat,label=trn$target)
+dmat_test <- xgb.DMatrix(test_mat,label=tst$target)
+
+param <- list(colsample_bytree = 0.8,
+              subsample_bytree = 0.7,
+              booster="gbtree",
+              objective="binary:logistic",
+              eta=.2,gamma=5,
+              max_depth=15,
+              eval_metric = "auc")
+
+xg_mod <- xgb.train(params = param,
+                    data = dmat_train,
+                    nrounds = 50)
+
+xg_predict <- predict(xg_mod,dmat_test)
+predic<- ifelse(xg_predict>0.5,1,0)
+tst$target = as.factor(tst$target)
+tst$predi = as.factor(predic)
+
+```
+
+### Kappa and Accuracy ###
+```{r}
+cu = confusionMatrix(tst$predi,tst$target,positive = "1")
+cu$overall[1]
+cu$overall[2]
+```
+
+```{r}
+#F1 Score = 2*(Recall * Precision) / (Recall + Precision)
+
+precisi = cu$byClass[5]
+recall = cu$byClass[6]
+f = 2*(recall * precisi) / (recall + precisi)
+names(f) = "F1"
+f
+```
+
+
+### ROC ###
+```{r}
+x = roc(predictor = xg_predict,response = tst$target)
+plot(x)
+```
+
+### AUC ###
+```{r}
+x$auc
+```
+
+
